@@ -1,69 +1,7 @@
 from abc import ABC, abstractmethod
-from enum import IntEnum
-from io import BytesIO
 from sys import argv
-
-class Opcode(IntEnum):
-    UNDEF = 0
-    IGNORE = 1
-    BREAK = 2
-    ENTER = 3
-    LEAVE = 4
-    CALL = 5
-    PUSH = 6
-    POP = 7
-    CONST = 8
-    LOCAL = 9
-    JUMP = 10
-    EQ = 11
-    NE = 12
-    LTI = 13
-    LEI = 14
-    GTI = 15
-    GEI = 16
-    LTU = 17
-    LEU = 18
-    GTU = 19
-    GEU = 20
-    EQF = 21
-    NEF = 22
-    LTF = 23
-    LEF = 24
-    GTF = 25
-    GEF = 26
-    LOAD1 = 27
-    LOAD2 = 28
-    LOAD4 = 29
-    STORE1 = 30
-    STORE2 = 31
-    STORE4 = 32
-    ARG = 33
-    BLOCK_COPY = 34
-    SEX8 = 35
-    SEX16 = 36
-    NEGI = 37
-    ADD = 38
-    SUB = 39
-    DIVI = 40
-    DIVU = 41
-    MODI = 42
-    MODU = 43
-    MULI = 44
-    MULU = 45
-    BAND = 46
-    BOR = 47
-    BXOR = 48
-    BCOM = 49
-    LSH = 50
-    RSHI = 51
-    RSHU = 52
-    NEGF = 53
-    ADDF = 54
-    SUBF = 55
-    DIVF = 56
-    MULF = 57
-    CVIF = 58
-    CVFI = 59
+from .qvm import Qvm, Instruction
+from .opcode import Opcode
 
 class ASTNode(ABC):
     @abstractmethod
@@ -101,14 +39,12 @@ class UnaryOp(Expr):
         return f"{self.__class__.__name__}(target={self.target!r})"
 
 class Neg(UnaryOp):
-    OP = '-'
+    pass
 
 class BCom(UnaryOp):
-    OP = '~'
+    pass
 
 class BinOp(Expr):
-    OP: str
-    
     def __init__(self, lhs, rhs):
         self.lhs = lhs
         self.rhs = rhs
@@ -121,58 +57,58 @@ class BinOp(Expr):
         return f"{self.__class__.__name__}(lhs={self.lhs!r}, rhs={self.rhs!r})"
 
 class Add(BinOp):
-    OP = '+'
+    pass
 
 class Sub(BinOp):
-    OP = '-'
+    pass
 
 class Div(BinOp):
-    OP = '/'
+    pass
 
 class Mod(BinOp):
-    OP = '%'
+    pass
 
 class Mul(BinOp):
-    OP = '*'
+    pass
 
 class And(BinOp):
-    OP = '&'
+    pass
 
 class Or(BinOp):
-    OP = '|'
+    pass
 
 class Xor(BinOp):
-    OP = '^'
+    pass
 
 class Lsh(BinOp):
-    OP = '<<'
+    pass
 
 class Rsh(BinOp):
-    OP = '>>'
+    pass
 
 class Assign(BinOp):
-    OP = '='
+    pass
 
 class Comparison(BinOp):
     pass
 
 class Eq(Comparison):
-    OP = "=="
+    pass
 
 class Ne(Comparison):
-    OP = "!="
+    pass
 
 class Lt(Comparison):
-    OP = "<"
+    pass
 
 class Le(Comparison):
-    OP = "<="
+    pass
 
 class Gt(Comparison):
-    OP = ">"
+    pass
 
 class Ge(Comparison):
-    OP = ">="
+    pass
 
 class Deref(Expr):
     def __init__(self, size, target):
@@ -195,7 +131,7 @@ class Ref(Expr):
     def __repr__(self):
         return f"Ref(target={self.target!r})"
 
-class FunCall(Expr):
+class Call(Expr):
     def __init__(self, target, args):
         self.target = target
         self.args = args
@@ -205,7 +141,7 @@ class FunCall(Expr):
         yield from self.args
 
     def __repr__(self):
-        return f"FunCall(target={self.target!r}, args={self.args!r})"
+        return f"Call(target={self.target!r}, args={self.args!r})"
 
 class StackVar(Expr):
     def __init__(self, offset):
@@ -321,77 +257,43 @@ unary_op_map = {
     Opcode.BCOM: BCom    
 }
 
-with open(argv[1], "rb") as f:
-    magic = f.read(4)
-    assert magic == b"\x44\x14\x72\x12"
-    instruction_count = _read_int_32(f)
-    code_offset, code_length = _read_int_32(f), _read_int_32(f)
-    data_offset, data_length = _read_int_32(f), _read_int_32(f)
-    lit_length, bss_length = _read_int_32(f), _read_int_32(f)
+class BasicBlock:
+    def __init__(self, nodes):
+        self.nodes = nodes
+        self.predecessors = []
+        self.successors = []
 
-    f.seek(code_offset)
-    code = BytesIO(f.read(code_length)) # TODO: this is redundant
-
-    f.seek(data_offset)
-    data = f.read(data_length + lit_length)
-
+def astify(instructions):
     op_stack = []
     ast_nodes = []
     call_args = []
-    basic_block_leaders = set()
-    inst_ast_map = {}
-    inst_idx = 0
-    def add_node(node, i):
-        global inst_idx # TODO idk
-        inst_ast_map[inst_idx] = len(ast_nodes)
-        inst_idx = i + 1
-        ast_nodes.append(node)
-    for i in range(instruction_count):
-        match code.read(1)[0]:
+    for instruction in instructions:
+        match instruction.op:
             case Opcode.UNDEF | Opcode.IGNORE | Opcode.BREAK:
                 pass
             case Opcode.ENTER:
-                assert len(op_stack) == 0, (hex(i), op_stack)
-                if ast_nodes: print(ast_nodes)
-                ast_nodes = []
-                stack_size = _read_int_32(code)
+                stack_size = instruction.arg # TODO: store somewhere or something?
             case Opcode.LEAVE:
-                add_node(Return(op_stack.pop()), i)
-                stack_size = _read_int_32(code) # TODO: assert mb
+                ast_nodes.append(Return(op_stack.pop()))
+                stack_size = instruction.arg # TODO: same question as ENTER
             case Opcode.CALL:
-                op_stack.append(FunCall(op_stack.pop(), call_args))
+                op_stack.append(Call(op_stack.pop(), call_args))
                 call_args = []
             case Opcode.PUSH:
                 op_stack.append(None)
             case Opcode.POP:
-                add_node(op_stack.pop(), i)
+                ast_nodes.append(op_stack.pop())
                 assert len(op_stack) == 0, (hex(i), op_stack) # TODO: is this right?
             case Opcode.CONST:
-                op_stack.append(Constant(_read_int_32(code)))
+                op_stack.append(Constant(instruction.arg))
             case Opcode.LOCAL:
-                op_stack.append(Ref(StackVar(_read_int_32(code))))
+                op_stack.append(Ref(StackVar(instruction.arg)))
             case Opcode.JUMP:
                 target = op_stack.pop()
-                if isinstance(target, Constant):
-                    basic_block_leaders.add(target.value)
-                else:
-                    match ast_nodes:
-                        case [*_, Lt(lhs=_, rhs=Constant(value=min_bound)), Gt(lhs=_, rhs=Constant(value=max_bound))]:
-                            num_entries = max_bound - min_bound + 1
-                            match target:
-                                case Deref(target=Add(lhs=_, rhs=Constant(value=base))):
-                                    base += min_bound * 4
-                                    for addr in range(base, base + num_entries * 4, 4):
-                                        basic_block_leaders.add(int.from_bytes(data[addr:addr+4], 'little'))
-                        case _:
-                            raise Exception(f"Unrecognized switch-case @ {i:#x}")
-                basic_block_leaders.add(i + 1)
-                add_node(Goto(target), i)
+                ast_nodes.append(Goto(target))
             case op if op in comparison_map:
-                basic_block_leaders.add(_read_int_32(code))
-                basic_block_leaders.add(i + 1)
                 rhs, lhs = op_stack.pop(), op_stack.pop()
-                add_node(comparison_map[op](lhs, rhs), i)
+                ast_nodes.append(comparison_map[op](lhs, rhs))
             case op if op in bin_op_map:
                 rhs, lhs = op_stack.pop(), op_stack.pop()
                 op_stack.append(bin_op_map[op](lhs, rhs))
@@ -401,15 +303,15 @@ with open(argv[1], "rb") as f:
             case (Opcode.STORE1 | Opcode.STORE2 | Opcode.STORE4) as op:
                 rhs, lhs = op_stack.pop(), op_stack.pop()
                 size = int(2**(op - Opcode.STORE1))
-                add_node(Assign(Deref(size, lhs), rhs), i)
+                ast_nodes.append(Assign(Deref(size, lhs), rhs))
             case Opcode.ARG:
                 arg = op_stack.pop()
-                todo = code.read(1)[0] # TODO: maybe use this one day if needed...
+                offset = instruction.arg # TODO: maybe use this one day if needed...
                 call_args.append(arg)
             case Opcode.BLOCK_COPY:
-                size = _read_int_32(code)
+                size = instruction.arg
                 rhs, lhs = op_stack.pop(), op_stack.pop()
-                add_node(Assign(Deref(size, lhs), Deref(size, rhs)), i)
+                ast_nodes.append(Assign(Deref(size, lhs), Deref(size, rhs)))
             case Opcode.SEX8:
                 # TODO: don't need to add casts if input is already the right type
                 # (or have a pass to remove useless casts later)
@@ -423,5 +325,134 @@ with open(argv[1], "rb") as f:
             case Opcode.CVFI:
                 op_stack.append(Cast(op_stack.pop(), 'int'))
             case op:
-                raise Exception(f"Invalid opcode: {op}") # TODO: Find a better class to throw?
-    if ast_nodes: print(ast_nodes)
+                raise Exception(f"Invalid opcode: {op}")
+    return ast_nodes
+
+qvm = Qvm(argv[1])
+for func_addr in qvm.func_addrs:
+    basic_block_leaders = set()
+    branch_successors_map = {} # map from the branching instruction index to its successors' indices
+    instructions = qvm.get_function(func_addr)
+    def add_leader(branch_idx, leader_addr, conditional):
+        if branch_idx not in branch_successors_map:
+            branch_successors_map[branch_idx] = []
+        leader_idx = leader_addr - func_addr
+        branch_successors_map[branch_idx].append(leader_idx)
+        basic_block_leaders.add(leader_idx)
+        next_inst_addr = branch_idx + 1
+        if next_inst_addr < len(instructions):
+            if conditional:
+                branch_successors_map[branch_idx].append(next_inst_addr)
+            basic_block_leaders.add(next_inst_addr)
+    for i, inst in enumerate(instructions):
+        match inst.op:
+            case Opcode.JUMP:
+                if instructions[i - 1].op == Opcode.CONST:
+                    add_leader(i, instructions[i - 1].arg, False)
+                else:
+                    min_bound = max_bound = switch_base = None
+                    match instructions[:i]: # TODO: change the LSH 2 to actually check for 2 only
+                        case [
+                            *_,
+                            Instruction(op=Opcode.LOCAL, arg=temp_offset1),
+                            Instruction(op=Opcode.CONST, arg=minb),
+                            Instruction(op=Opcode.STORE4),
+                            Instruction(op=Opcode.LOCAL),
+                            Instruction(op=Opcode.LOAD4),
+                            Instruction(op=Opcode.LOCAL, arg=temp_offset2),
+                            Instruction(op=Opcode.LOAD4),
+                            Instruction(op=Opcode.LTI),
+                            Instruction(op=Opcode.LOCAL),
+                            Instruction(op=Opcode.LOAD4),
+                            Instruction(op=Opcode.CONST, arg=maxb),
+                            Instruction(op=Opcode.GTI),
+                            Instruction(op=Opcode.LOCAL),
+                            Instruction(op=Opcode.LOAD4),
+                            Instruction(op=Opcode.LOCAL),
+                            Instruction(op=Opcode.LOAD4),
+                            Instruction(op=Opcode.LSH),
+                            Instruction(op=Opcode.CONST, arg=base),
+                            Instruction(op=Opcode.ADD),
+                            Instruction(op=Opcode.LOAD4)
+                        ] if temp_offset1 == temp_offset2:
+                            min_bound, max_bound = minb, maxb
+                            switch_base = base
+                        case [
+                            *_,
+                            Instruction(op=Opcode.LOCAL, arg=temp_offset1),
+                            Instruction(op=Opcode.CONST, arg=maxb),
+                            Instruction(op=Opcode.STORE4),
+                            Instruction(op=Opcode.LOCAL),
+                            Instruction(op=Opcode.LOAD4),
+                            Instruction(op=Opcode.CONST, arg=minb),
+                            Instruction(op=Opcode.LTI),
+                            Instruction(op=Opcode.LOCAL),
+                            Instruction(op=Opcode.LOAD4),
+                            Instruction(op=Opcode.LOCAL, arg=temp_offset2),
+                            Instruction(op=Opcode.LOAD4),
+                            Instruction(op=Opcode.GTI),
+                            Instruction(op=Opcode.LOCAL),
+                            Instruction(op=Opcode.LOAD4),
+                            Instruction(op=Opcode.LOCAL),
+                            Instruction(op=Opcode.LOAD4),
+                            Instruction(op=Opcode.LSH),
+                            Instruction(op=Opcode.CONST, arg=base),
+                            Instruction(op=Opcode.ADD),
+                            Instruction(op=Opcode.LOAD4)
+                        ] if temp_offset1 == temp_offset2:
+                            min_bound, max_bound = minb, maxb
+                            switch_base = base
+                        case [
+                            *_,
+                            Instruction(op=Opcode.LOCAL),
+                            Instruction(op=Opcode.LOAD4),
+                            Instruction(op=Opcode.CONST, arg=minb),
+                            Instruction(op=Opcode.LTI),
+                            Instruction(op=Opcode.LOCAL),
+                            Instruction(op=Opcode.LOAD4),
+                            Instruction(op=Opcode.CONST, arg=maxb),
+                            Instruction(op=Opcode.GTI),
+                            Instruction(op=Opcode.LOCAL),
+                            Instruction(op=Opcode.LOAD4),
+                            Instruction(op=Opcode.CONST),
+                            Instruction(op=Opcode.LSH),
+                            Instruction(op=Opcode.CONST, arg=base),
+                            Instruction(op=Opcode.ADD),
+                            Instruction(op=Opcode.LOAD4)
+                        ]:
+                            min_bound, max_bound = minb, maxb
+                            switch_base = base
+                    if None in (min_bound, max_bound, switch_base):
+                        raise Exception(f"Unrecognized switch-case @ {i:#x}")
+                    num_entries = max_bound - min_bound + 1
+                    switch_base += min_bound * 4
+                    for addr in range(switch_base, switch_base + num_entries * 4, 4):
+                        add_leader(i, int.from_bytes(qvm.data[addr:addr + 4], 'little'), False)
+            case op if op in comparison_map:
+                add_leader(i, inst.arg, True)
+    
+    basic_blocks = {}
+    block_successors_map = {} # map from the block id (index of first instruction in block) to its successor block ids
+    block_start_idx = 0
+    for block_end_idx in sorted(basic_block_leaders | {len(instructions)}):
+        if len(block_instructions := instructions[block_start_idx:block_end_idx]):
+            if (branch_idx := block_end_idx - 1) in branch_successors_map:
+                block_successors_map[block_start_idx] = branch_successors_map[branch_idx]
+            basic_blocks[block_start_idx] = BasicBlock(astify(block_instructions))
+            block_start_idx = block_end_idx
+            
+    for block_start_idx, successors in block_successors_map.items():
+        curr_block = basic_blocks[block_start_idx]
+        for succ_block_idx in successors:
+            succ_block = basic_blocks[succ_block_idx]
+            curr_block.successors.append(succ_block)
+            succ_block.predecessors.append(curr_block)
+    
+    print(f"sub_{func_addr:x}:")
+    for key in sorted(basic_blocks.keys()):
+        print(f"block_{key:x}:")
+        block = basic_blocks[key]
+        for node in block.nodes:
+            print(node)
+        print("successors:", [f"block_{list(basic_blocks.keys())[list(basic_blocks.values()).index(i)]:x}" for i in block.successors])
+        print()
