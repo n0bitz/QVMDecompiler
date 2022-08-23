@@ -5,7 +5,7 @@ from .opcode import Opcode
 
 class ASTNode(ABC):
     @abstractmethod
-    def __items__(self):
+    def __iter__(self):
         pass
 
     @abstractmethod
@@ -19,7 +19,7 @@ class Constant(Expr):
     def __init__(self, value):
         self.value = value
 
-    def __items__(self):
+    def __iter__(self):
         yield from ()
     
     def __repr__(self):
@@ -27,13 +27,11 @@ class Constant(Expr):
 
 
 class UnaryOp(Expr):
-    OP: str
-
     def __init__(self, target):
         self.target = target
 
-    def __items__(self):
-        yield self.target
+    def __iter__(self):
+        yield "target", self.target
     
     def __repr__(self):
         return f"{self.__class__.__name__}(target={self.target!r})"
@@ -49,9 +47,9 @@ class BinOp(Expr):
         self.lhs = lhs
         self.rhs = rhs
 
-    def __items__(self):
-        yield self.lhs
-        yield self.rhs
+    def __iter__(self):
+        yield "lhs", self.lhs
+        yield "rhs", self.rhs
     
     def __repr__(self):
         return f"{self.__class__.__name__}(lhs={self.lhs!r}, rhs={self.rhs!r})"
@@ -115,8 +113,8 @@ class Deref(Expr):
         self.size = size
         self.target = target
     
-    def __items__(self):
-        yield self.target
+    def __iter__(self):
+        yield "target", self.target
 
     def __repr__(self):
         return f"Deref(size={self.size!r}, target={self.target!r})"
@@ -125,8 +123,8 @@ class Ref(Expr):
     def __init__(self, target):
         self.target = target
 
-    def __items__(self):
-        yield self.target
+    def __iter__(self):
+        yield "target", self.target
 
     def __repr__(self):
         return f"Ref(target={self.target!r})"
@@ -136,9 +134,9 @@ class Call(Expr):
         self.target = target
         self.args = args
     
-    def __items__(self):
-        yield self.target
-        yield from self.args
+    def __iter__(self):
+        yield "target", self.target
+        yield "args", self.args
 
     def __repr__(self):
         return f"Call(target={self.target!r}, args={self.args!r})"
@@ -147,7 +145,7 @@ class StackVar(Expr):
     def __init__(self, offset):
         self.offset = offset
     
-    def __items__(self):
+    def __iter__(self):
         yield from ()
 
     def __repr__(self):
@@ -158,8 +156,8 @@ class Cast(Expr):
         self.expr = expr
         self.type = type
     
-    def __items__(self):
-        yield self.expr
+    def __iter__(self):
+        yield "expr", self.expr
     
     def __repr__(self):
         return f"Cast(expr={self.expr!r}, type={self.type!r})"
@@ -172,7 +170,7 @@ class ExprStmt(Stmt):
         self.expr = expr
 
     def __init__(self):
-        yield self.expr
+        yield "expr", self.expr
     
     def __repr__(self):
         return f"ExprStmt(expr={self.expr!r})"
@@ -181,8 +179,8 @@ class Block(Stmt):
     def __init__(self, stmts):
         self.stmts = stmts
     
-    def __items__(self):
-        yield from self.stmts
+    def __iter__(self):
+        yield "stmts", self.stmts
     
     def __repr__(self):
         return f"Block(stmts={self.children!r})"
@@ -191,8 +189,8 @@ class Goto(Stmt):
     def __init__(self, target):
         self.target = target
     
-    def __items__(self):
-        yield self.target
+    def __iter__(self):
+        yield "target", self.target
     
     def __repr__(self):
         return f"Goto(target={self.target!r})"
@@ -201,12 +199,45 @@ class Return(Stmt):
     def __init__(self, value):
         self.value = value
     
-    def __items__(self):
+    def __iter__(self):
         if self.value:
-            yield self.value
+            yield "value", self.value
     
     def __repr__(self):
         return f"Return(value={self.value!r})"
+
+class ASTVisitor(ABC):
+    def generic_visit(self, node):
+        for _, child in node:
+            if isinstance(child, list):
+                for item in child:
+                    self.visit(item)
+            else:
+                self.visit(child)
+
+    def visit(self, node):
+        for cls in node.__class__.__mro__:
+            class_name = cls.__name__
+            if method := getattr(self, f"visit_{class_name}", None):
+                return method(node)
+        return self.generic_visit(node)
+
+class ASTTransformer(ASTVisitor):
+    def generic_visit(self, node):
+        for attr, child in node:
+            if isinstance(child, list):
+                for i, item in enumerate(child):
+                    child[i] = self.visit(item)
+            else:
+                setattr(node, attr, self.visit(child))
+        return node
+    
+
+class DerefRefSimplifier(ASTTransformer):
+    def visit_Deref(self, deref):
+        if isinstance(ref := deref.target, Ref):
+            return ref.target
+        return deref
     
 def _read_int_32(f):
     return int.from_bytes(f.read(4), "little", signed=True)
@@ -449,10 +480,12 @@ for func_addr in qvm.func_addrs:
             succ_block.predecessors.append(curr_block)
     
     print(f"sub_{func_addr:x}:")
+    deref_ref_simplifier = DerefRefSimplifier()
     for key in sorted(basic_blocks.keys()):
         print(f"block_{key:x}:")
         block = basic_blocks[key]
-        for node in block.nodes:
+        for i, node in enumerate(block.nodes):
+            block.nodes[i] = node = deref_ref_simplifier.visit(node)
             print(node)
         print("successors:", [f"block_{list(basic_blocks.keys())[list(basic_blocks.values()).index(i)]:x}" for i in block.successors])
         print()
