@@ -27,14 +27,14 @@ class Constant(Expr):
 
 
 class UnaryOp(Expr):
-    def __init__(self, target):
-        self.target = target
+    def __init__(self, expr):
+        self.expr = expr
 
     def __iter__(self):
-        yield "target", self.target
+        yield "expr", self.expr
     
     def __repr__(self):
-        return f"{self.__class__.__name__}(target={self.target!r})"
+        return f"{self.__class__.__name__}(expr={self.expr!r})"
 
 class Neg(UnaryOp):
     pass
@@ -108,26 +108,20 @@ class Gt(Comparison):
 class Ge(Comparison):
     pass
 
-class Deref(Expr):
-    def __init__(self, size, target):
+class Deref(UnaryOp):
+    def __init__(self, size, expr):
         self.size = size
-        self.target = target
-    
-    def __iter__(self):
-        yield "target", self.target
+        self.expr = expr
 
     def __repr__(self):
-        return f"Deref(size={self.size!r}, target={self.target!r})"
+        return f"Deref(size={self.size!r}, expr={self.expr!r})"
 
-class Ref(Expr):
-    def __init__(self, target):
-        self.target = target
-
-    def __iter__(self):
-        yield "target", self.target
+class Ref(UnaryOp):
+    def __init__(self, expr):
+        self.expr = expr
 
     def __repr__(self):
-        return f"Ref(target={self.target!r})"
+        return f"Ref(expr={self.expr!r})"
 
 class Call(Expr):
     def __init__(self, target, args):
@@ -151,13 +145,10 @@ class StackVar(Expr):
     def __repr__(self):
         return f"StackVar(offset={self.offset:#x})"
 
-class Cast(Expr):
+class Cast(UnaryOp):
     def __init__(self, expr, type):
         self.expr = expr
         self.type = type
-    
-    def __iter__(self):
-        yield "expr", self.expr
     
     def __repr__(self):
         return f"Cast(expr={self.expr!r}, type={self.type!r})"
@@ -235,12 +226,154 @@ class ASTTransformer(ASTVisitor):
 
 class DerefRefSimplifier(ASTTransformer):
     def visit_Deref(self, deref):
-        if isinstance(ref := deref.target, Ref):
-            return ref.target
+        deref.expr = self.visit(deref.expr)
+        if isinstance(ref := deref.expr, Ref):
+            return ref.expr
         return deref
+
+class ASTPrettyPrinter(ASTVisitor):
+    def get_precedence(self, expr): # TODO: ????
+        match expr:
+            case Ref() | Deref() | Cast() | Neg() | BCom():
+                return 2
+            case Div() | Mod() | Mul():
+                return 3
+            case Add() | Sub():
+                return 4
+            case Lsh() | Rsh():
+                return 5
+            case Lt() | Le() | Gt() | Ge():
+                return 6
+            case Eq() | Ne():
+                return 7
+            case And():
+                return 8
+            case Xor():
+                return 9
+            case Or():
+                return 10
+            case Assign():
+                return 14
+            case Constant() | StackVar() | Call():
+                return 0
+            case _:
+                raise Exception(f"Unrecognized: ({expr!r})")
+
+    def get_associativity(self, expr): # TODO: ????
+        match expr:
+            case Ref() | Deref() | Cast() | Neg() | BCom():
+                return "RTL"
+            case Div() | Mod() | Mul() | Add() | Sub() | Lsh() | Rsh() | Lt() | Le() | Gt() | Ge()| Eq() | Ne() | And() | Xor() | Or():
+                return "LTR"
+            case Assign():
+                return "RTL"
+            case Constant() | StackVar():
+                return
+            case _:
+                raise Exception(f"Unrecognized: ({expr!r})")
+
+    def visit_ASTNode(self, node):
+        raise Exception(f"Unhandled ASTNode: {node!r}")
+
+    def visit_Constant(self, node):
+        return f"{node.value:#x}"
     
-def _read_int_32(f):
-    return int.from_bytes(f.read(4), "little", signed=True)
+    def visit_StackVar(self, node):
+        return f"local_{node.offset:x}" # TODO: args vs locals                
+    
+    def visit_Call(self, node):
+        target = node.target
+        if isinstance(target, Constant):
+            if (value := target.value) < 0:
+                target = f"trap_{target.value & 0xFFFFFFFF:x}"
+            else:
+                target = f"sub_{target.value:x}"
+        else:
+            target = self.visit(target)
+        return f"{target}({', '.join(self.visit(arg) for arg in node.args)})"
+    
+    def visit_UnaryOp(self, node):
+        match node:
+            case BCom():
+                op = "~"
+            case Neg():
+                op = "-"
+            case Ref():
+                op = "&"
+            case Deref():
+                op = "*"
+            case Cast():
+                op = f"({node.type})"
+            case _:
+                raise Exception(f"Unrecognized UnaryOp: ({node!r})")
+        node_prec, node_assoc = self.get_precedence(node), self.get_associativity(node)
+        expr = self.visit(node.expr)
+        expr_prec = self.get_precedence(node.expr)
+        if expr_prec > node_prec or (expr_prec == node_prec and node_assoc == "LTR"):
+            expr = f"({expr})"
+        return f"{op}{expr}"
+
+    def visit_BinOp(self, node):
+        match node:
+            case Add():
+                op = "+"
+            case Sub():
+                op = "-"
+            case Div():
+                op = "/"
+            case Mod():
+                op = "%"
+            case Mul():
+                op = "*"
+            case And():
+                op = "&"
+            case Or():
+                op = "|"
+            case Xor():
+                op = "^"
+            case Lsh():
+                op = "<<"
+            case Rsh():
+                op = ">>"
+            case Eq():
+                op = "=="
+            case Ne():
+                op = "!="
+            case Lt():
+                op = "<"
+            case Le():
+                op = "<="
+            case Gt():
+                op = ">"
+            case Ge():
+                op = ">="
+            case Assign():
+                op = "="
+            case _:
+                raise Exception(f"Unrecognized BinOp: ({node!r})")
+
+        node_prec, node_assoc = self.get_precedence(node), self.get_associativity(node)
+        lhs = self.visit(node.lhs)
+        lhs_prec = self.get_precedence(node.lhs)
+        if lhs_prec > node_prec or (lhs_prec == node_prec and node_assoc == "RTL"):
+            lhs = f"({lhs})"
+
+        rhs = self.visit(node.rhs)
+        rhs_prec = self.get_precedence(node.rhs)
+        if rhs_prec > node_prec or (rhs_prec == node_prec and node_assoc == "LTR"):
+            rhs = f"({rhs})"
+
+        return f"{lhs} {op} {rhs}"
+    
+    def visit_Goto(self, node):
+        target = self.visit(node.target)
+        return f"goto {target};"
+    
+    def visit_Return(self, node):
+        if node.value is not None:
+            value = self.visit(node.value)
+            return f"return {value};"
+        return "return;"
 
 comparison_map = {
     Opcode.EQ: Eq,
@@ -479,13 +612,22 @@ for func_addr in qvm.func_addrs:
             curr_block.successors.append(succ_block)
             succ_block.predecessors.append(curr_block)
     
-    print(f"sub_{func_addr:x}:")
+    # TODO: This relies on dict order being insertion order (which it is, but still) and iterates over things it doesn't need to.
+    block_keys = list(basic_blocks.keys())
+    for i, key in enumerate(block_keys):
+        block = basic_blocks[key]
+        if len(block.successors) == 0 and i + 1 < len(block_keys):
+            next_block = basic_blocks[block_keys[i + 1]]
+            block.successors.append(next_block)
+            next_block.predecessors.append(block)
+    
     deref_ref_simplifier = DerefRefSimplifier()
-    for key in sorted(basic_blocks.keys()):
-        print(f"block_{key:x}:")
+    pretty_printer = ASTPrettyPrinter()
+    for i, key in enumerate(sorted(basic_blocks.keys())):
+        print(f"{'block' if i else 'sub'}_{key + func_addr:x}:") # TODO: maybe keep the func_addr so you don't have to add it back here?
         block = basic_blocks[key]
         for i, node in enumerate(block.nodes):
             block.nodes[i] = node = deref_ref_simplifier.visit(node)
-            print(node)
-        print("successors:", [f"block_{list(basic_blocks.keys())[list(basic_blocks.values()).index(i)]:x}" for i in block.successors])
+            print(pretty_printer.visit(node))
+        print("successors:", [f"block_{list(basic_blocks.keys())[list(basic_blocks.values()).index(i)] + func_addr:x}" for i in block.successors])
         print()
