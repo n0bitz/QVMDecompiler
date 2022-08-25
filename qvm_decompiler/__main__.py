@@ -208,9 +208,8 @@ class ASTVisitor(ABC):
 
     def visit(self, node):
         for cls in node.__class__.__mro__:
-            class_name = cls.__name__
-            if method := getattr(self, f"visit_{class_name}", None):
-                return method(node)
+            if visit_method := getattr(self, f"visit_{cls.__name__}", None):
+                return visit_method(node)
         return self.generic_visit(node)
 
 class ASTTransformer(ASTVisitor):
@@ -226,6 +225,7 @@ class ASTTransformer(ASTVisitor):
 
 class DerefRefSimplifier(ASTTransformer):
     def visit_Deref(self, deref):
+        # TODO: size goes away... :(
         deref.expr = self.visit(deref.expr)
         if isinstance(ref := deref.expr, Ref):
             return ref.expr
@@ -612,22 +612,46 @@ for func_addr in qvm.func_addrs:
             curr_block.successors.append(succ_block)
             succ_block.predecessors.append(curr_block)
     
-    # TODO: This relies on dict order being insertion order (which it is, but still) and iterates over things it doesn't need to.
-    block_keys = list(basic_blocks.keys())
-    for i, key in enumerate(block_keys):
-        block = basic_blocks[key]
-        if len(block.successors) == 0 and i + 1 < len(block_keys):
-            next_block = basic_blocks[block_keys[i + 1]]
+    block_ids = sorted(basic_blocks.keys())
+    for i, id in enumerate(block_ids):
+        block = basic_blocks[id]
+        if len(block.successors) == 0 and i + 1 < len(block_ids):
+            next_block = basic_blocks[block_ids[i + 1]]
             block.successors.append(next_block)
             next_block.predecessors.append(block)
     
     deref_ref_simplifier = DerefRefSimplifier()
+    for block in basic_blocks.values():
+        nodes = block.nodes
+        for i, node in enumerate(nodes):
+            nodes[i] = deref_ref_simplifier.visit(node)
+        # TODO: REWRITE
+        for i in range(len(nodes) - 2, -1, -1):
+            match nodes[i]:
+                case Assign(lhs=StackVar(offset=temp), rhs=Call() as call):
+                    for k, v in nodes[i+1]:
+                        if isinstance(v, list):
+                            for j, node in enumerate(v):
+                                if isinstance(node, StackVar) and node.offset == temp:
+                                    v[j] = call
+                                    nodes.pop(i)
+                        elif isinstance(v, StackVar) and v.offset == temp:
+                            setattr(nodes[i+1], k, call)
+                            nodes.pop(i)
+        match block:
+            case BasicBlock(
+                nodes=[*_, Return(value=value), Goto()],
+                successors=[BasicBlock(nodes=[Return(value=None)])]
+            ) if value is not None:
+                nodes.pop()
+                useless_ret_block = block.successors.pop()
+                useless_ret_block.predecessors.remove(block)
+
     pretty_printer = ASTPrettyPrinter()
-    for i, key in enumerate(sorted(basic_blocks.keys())):
-        print(f"{'block' if i else 'sub'}_{key + func_addr:x}:") # TODO: maybe keep the func_addr so you don't have to add it back here?
-        block = basic_blocks[key]
-        for i, node in enumerate(block.nodes):
-            block.nodes[i] = node = deref_ref_simplifier.visit(node)
+    for i, id in enumerate(block_ids):
+        print(f"{'block' if i else 'sub'}_{id + func_addr:x}:") # TODO: maybe keep the func_addr so you don't have to add it back here?
+        block = basic_blocks[id]
+        for node in block.nodes:
             print(pretty_printer.visit(node))
         print("successors:", [f"block_{list(basic_blocks.keys())[list(basic_blocks.values()).index(i)] + func_addr:x}" for i in block.successors])
         print()
