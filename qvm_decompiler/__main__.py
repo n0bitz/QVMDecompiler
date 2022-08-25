@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from ast import AST
 from sys import argv
 from .qvm import Qvm, Instruction
 from .opcode import Opcode
@@ -12,6 +13,9 @@ class ASTNode(ABC):
     def __repr__(self):
         pass
 
+    def __eq__(self, other):
+        return type(other) == type(self) and [i for i in self] == [i for i in other]
+
 class Expr(ASTNode):
     pass
     
@@ -20,7 +24,7 @@ class Constant(Expr):
         self.value = value
 
     def __iter__(self):
-        yield from ()
+        yield "value", self.value
     
     def __repr__(self):
         return f"Constant(value={self.value:#x})"
@@ -112,6 +116,10 @@ class Deref(UnaryOp):
     def __init__(self, size, expr):
         self.size = size
         self.expr = expr
+    
+    def __iter__(self):
+        yield from super().__iter__()
+        yield "size", self.size
 
     def __repr__(self):
         return f"Deref(size={self.size!r}, expr={self.expr!r})"
@@ -140,16 +148,20 @@ class StackVar(Expr):
         self.offset = offset
     
     def __iter__(self):
-        yield from ()
+        yield "offset", self.offset
 
     def __repr__(self):
         return f"StackVar(offset={self.offset:#x})"
 
 class Cast(UnaryOp):
     def __init__(self, expr, type):
-        self.expr = expr
+        super().__init__(expr)
         self.type = type
     
+    def __iter__(self):
+        yield from super().__iter__()
+        yield "type", self.type
+        
     def __repr__(self):
         return f"Cast(expr={self.expr!r}, type={self.type!r})"
 
@@ -191,14 +203,15 @@ class Return(Stmt):
         self.value = value
     
     def __iter__(self):
-        if self.value:
-            yield "value", self.value
+        yield "value", self.value
     
     def __repr__(self):
         return f"Return(value={self.value!r})"
 
 class ASTVisitor(ABC):
     def generic_visit(self, node):
+        if not isinstance(node, ASTNode):
+            return
         for _, child in node:
             if isinstance(child, list):
                 for item in child:
@@ -214,6 +227,8 @@ class ASTVisitor(ABC):
 
 class ASTTransformer(ASTVisitor):
     def generic_visit(self, node):
+        if not isinstance(node, ASTNode):
+            return node
         for attr, child in node:
             if isinstance(child, list):
                 for i, item in enumerate(child):
@@ -374,6 +389,22 @@ class ASTPrettyPrinter(ASTVisitor):
             value = self.visit(node.value)
             return f"return {value};"
         return "return;"
+
+class NodeReplacer(ASTTransformer):
+    def __init__(self, tree):
+        self.tree = tree
+        self.replace_count = 0
+
+    def replace(self, old, new):
+        self.old, self.new = old, new
+        return self.visit(self.tree), self.replace_count
+    
+    def visit_ASTNode(self, node):
+        if node == self.old:
+            self.replace_count += 1
+            return self.new
+        self.generic_visit(node)
+        return node
 
 comparison_map = {
     Opcode.EQ: Eq,
@@ -625,19 +656,12 @@ for func_addr in qvm.func_addrs:
         nodes = block.nodes
         for i, node in enumerate(nodes):
             nodes[i] = deref_ref_simplifier.visit(node)
-        # TODO: REWRITE
         for i in range(len(nodes) - 2, -1, -1):
             match nodes[i]:
-                case Assign(lhs=StackVar(offset=temp), rhs=Call() as call):
-                    for k, v in nodes[i+1]:
-                        if isinstance(v, list):
-                            for j, node in enumerate(v):
-                                if isinstance(node, StackVar) and node.offset == temp:
-                                    v[j] = call
-                                    nodes.pop(i)
-                        elif isinstance(v, StackVar) and v.offset == temp:
-                            setattr(nodes[i+1], k, call)
-                            nodes.pop(i)
+                case Assign(lhs=StackVar() as var, rhs=Call() as call):
+                    nodes[i+1], replace_count = NodeReplacer(nodes[i+1]).replace(var, call)
+                    assert replace_count <= 1, replace_count
+                    nodes.pop(i)
         match block:
             case BasicBlock(
                 nodes=[*_, Return(value=value), Goto()],
