@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from ast import AST
 from sys import argv
 from .qvm import Qvm, Instruction
 from .opcode import Opcode
@@ -15,7 +14,7 @@ class ASTNode(ABC):
         pass
 
     def __eq__(self, other):
-        return type(other) == type(self) and [i for i in self] == [i for i in other]
+        return type(self) == type(other) and [i for i in self] == [i for i in other]
 
 
 class Expr(ASTNode):
@@ -143,8 +142,8 @@ class Deref(UnaryOp):
         self.expr = expr
 
     def __iter__(self):
-        yield from super().__iter__()
         yield "size", self.size
+        yield from super().__iter__()
 
     def __repr__(self):
         return f"Deref(size={self.size!r}, expr={self.expr!r})"
@@ -460,7 +459,8 @@ class NodeReplacer(ASTTransformer):
 
     def replace(self, old, new):
         self.old, self.new = old, new
-        return self.visit(self.tree), self.replace_count
+        self.tree = self.visit(self.tree)
+        return self.tree, self.replace_count
 
     def visit_ASTNode(self, node):
         if node == self.old:
@@ -734,6 +734,7 @@ for func_addr in qvm.func_addrs:
             match nodes[i]:
                 case Assign(lhs=StackVar() as var, rhs=Call() as call):
                     nodes[i + 1], replace_count = NodeReplacer(nodes[i + 1]).replace(var, call)
+                    # TODO: Don't like the "<", believe in proper data flow analysis sooner?
                     assert replace_count <= 1, replace_count
                     nodes.pop(i)
         match block:
