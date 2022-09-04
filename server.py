@@ -19,7 +19,7 @@ class Server:
         self.app.route("/<path:path>", "GET", self.static)
 
     def run(self):
-        self.app.run(host="localhost", port=80, reloader=True)
+        self.app.run(host="localhost", port=8080, reloader=True)
 
     def index(self):
         return static_file("index.html", "static")
