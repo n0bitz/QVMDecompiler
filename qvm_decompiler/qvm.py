@@ -101,7 +101,7 @@ def _read_int_8(f):
 class Instruction:
     def __init__(self, addr, op, arg=None):
         self.addr = addr
-        self.op = op
+        self.op = Opcode(op)
         self.arg = arg
 
     def __repr__(self):

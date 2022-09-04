@@ -20,6 +20,14 @@ jupyter = ["ipython (>=7.8.0)", "tokenize-rt (>=3.2.0)"]
 uvloop = ["uvloop (>=0.15.2)"]
 
 [[package]]
+name = "bottle"
+version = "0.12.23"
+description = "Fast and simple WSGI-framework for small web-applications."
+category = "main"
+optional = false
+python-versions = "*"
+
+[[package]]
 name = "click"
 version = "8.1.3"
 description = "Composable command line interface toolkit"
@@ -103,6 +111,21 @@ python-versions = ">=3.6.8"
 diagrams = ["railroad-diagrams", "jinja2"]
 
 [[package]]
+name = "quatch"
+version = "0.0.1"
+description = "A Quake 3 VM patching library"
+category = "main"
+optional = false
+python-versions = ">=3.7"
+develop = false
+
+[package.source]
+type = "git"
+url = "https://github.com/birdstakes/quatch.git"
+reference = "empty-qvm"
+resolved_reference = "5ca98609b2fe100547f7f5bacb41480c65fe64e5"
+
+[[package]]
 name = "svgutils"
 version = "0.3.4"
 description = "Python SVG editor"
@@ -124,10 +147,11 @@ python-versions = ">=3.7"
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.10"
-content-hash = "698e8863f6b0a3d47dba39bac1bf5a6b07a8c6445f604b7e5042d47daf548f88"
+content-hash = "c4022ef14a336e4c990d93f487453722f3f8ef823a0b1239444fca4da4410a8d"
 
 [metadata.files]
 black = []
+bottle = []
 click = []
 colorama = [
     {file = "colorama-0.4.5-py2.py3-none-any.whl", hash = "sha256:854bf444933e37f5824ae7bfc1e98d5bce2ebe4160d46b5edf346a89358e99da"},
@@ -142,5 +166,6 @@ pyparsing = [
     {file = "pyparsing-3.0.9-py3-none-any.whl", hash = "sha256:5026bae9a10eeaefb61dab2f09052b9f4307d44aee4eda64b309723d8d206bbc"},
     {file = "pyparsing-3.0.9.tar.gz", hash = "sha256:2b020ecf7d21b687f219b71ecad3631f644a47f01403fa1d1036b0c6416d70fb"},
 ]
+quatch = []
 svgutils = []
 tomli = []

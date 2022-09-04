@@ -69,6 +69,12 @@ class ASTGraphBuilder(ASTVisitor):
     def visit_ASTNode(self, node):
         return type(node).__name__
 
+    def visit_Constant(self, node):
+        return f"Constant({node.value:#x})"
+
+    def visit_StackVar(self, node):
+        return f"StackVar({node.offset:#x})"
+
 
 def graph_function(basic_blocks):
     function_graph = pydot.Dot(
