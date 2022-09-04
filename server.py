@@ -4,6 +4,7 @@ import quatch
 from pathlib import Path
 from time import time
 from bottle import Bottle, request, static_file
+from qvm_decompiler.decompile import decompile
 from qvm_decompiler.qvm import Qvm
 from qvm_decompiler.cfg import build_cfg
 from qvm_decompiler.graph import graph_function
@@ -11,10 +12,8 @@ from qvm_decompiler.graph import graph_function
 
 class Server:
     def __init__(self):
-        self.start_time = time()
         self.app = Bottle()
         self.app.route("/", "GET", self.index)
-        self.app.route("/status", "GET", self.status)
         self.app.route("/compile", "POST", self.compile)
         self.app.route("/<path:path>", "GET", self.static)
 
@@ -27,14 +26,16 @@ class Server:
     def static(self, path):
         return static_file(path, "static")
 
-    def status(self):
-        return json.dumps({"startTime": self.start_time})
-
     def compile(self):
         source = request.body.read().decode()
 
         quatch_qvm = quatch.Qvm()
-        quatch_qvm.add_c_code(source)
+        try:
+            output = quatch_qvm.add_c_code(source)
+        except quatch._compile.CompilerError as e:
+            output = str(e)
+            return json.dumps({k: output for k in ["disassembly", "assembly", "decompilation", "output"]})
+
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = Path(tmpdir).joinpath("input.c")
             asm_path = Path(tmpdir).joinpath("output.asm")
@@ -47,22 +48,19 @@ class Server:
             quatch_qvm.write(qvm_path)
             qvm = Qvm(qvm_path)
 
-        def disassemble(ins):
-            if ins.arg is None:
-                return f"0x{ins.addr:08x} {ins.op.name}"
-            else:
-                return f"0x{ins.addr:08x} {ins.op.name:<12}{ins.arg:#x}"
-
-        disassembly = "\n".join(disassemble(ins) for ins in qvm.instructions)
+        disassembly = "\n".join(str(ins) for ins in qvm.instructions)
 
         cfg = build_cfg(qvm)
         graph = graph_function(cfg[0]).to_str().decode()
+        decompilation = decompile(cfg)
 
         return json.dumps(
             {
                 "disassembly": disassembly,
                 "graph": graph,
                 "assembly": assembly,
+                "decompilation": decompilation,
+                "output": output,
             }
         )
 

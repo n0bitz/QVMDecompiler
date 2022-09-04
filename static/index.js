@@ -1,3 +1,19 @@
+let layout;
+
+const componentRegistrations = [];
+const registerComponent = (...args) => void componentRegistrations.push(args);
+
+const defaultStackContent = [];
+const registerStackComponent = (componentName, component) => {
+  registerComponent(componentName, component);
+  defaultStackContent.push({
+    type: "component",
+    componentName,
+    title: `${componentName[0].toUpperCase()}${componentName.slice(1)}`,
+    isClosable: false
+  });
+};
+
 const defaultInput = `\
 int f(unsigned int x) {
     if(x < 2) {
@@ -6,8 +22,7 @@ int f(unsigned int x) {
     return f(x - 1) + f(x - 2);
 }
 `;
-
-const config = {
+const defaultConfig = {
   settings: {
     showPopoutIcon: false,
   },
@@ -17,7 +32,7 @@ const config = {
       content: [
         {
           type: "component",
-          componentName: "inputComponent",
+          componentName: "input",
           title: "Input",
           isClosable: false,
           componentState: {
@@ -26,46 +41,19 @@ const config = {
         },
         {
           type: "stack",
-          content: [
-            {
-              type: "component",
-              componentName: "graphComponent",
-              title: "Graph",
-              isClosable: false,
-            },
-            {
-              type: "component",
-              componentName: "disassemblyComponent",
-              title: "Disassembly",
-              isClosable: false,
-            },
-            {
-              type: "component",
-              componentName: "assemblyComponent",
-              title: "Assembly",
-              isClosable: false,
-            },
-          ],
+          content: defaultStackContent,
         },
       ],
     },
   ],
 };
 
-let savedState = localStorage.getItem("savedState");
-let layout;
-if (savedState !== null) {
-  layout = new GoldenLayout(JSON.parse(savedState));
-} else {
-  layout = new GoldenLayout(config);
-}
-
 const createEditor = (container, mode, readOnly) => {
   container.on("resize", () => {
     window.dispatchEvent(new Event("resize"));
   });
 
-  let editor = ace.edit(container.getElement()[0], {
+  const editor = ace.edit(container.getElement()[0], {
     showPrintMargin: false,
     readOnly: readOnly,
     highlightActiveLine: !readOnly,
@@ -81,76 +69,37 @@ const createEditor = (container, mode, readOnly) => {
   return editor;
 };
 
-layout.registerComponent(
-  "inputComponent",
-  function (container, componentState) {
-    let editor = createEditor(container, "ace/mode/c_cpp", false);
-    editor.session.setValue(componentState.input);
-
-    let timeout;
-    editor.session.on("change", () => {
-      clearTimeout(timeout);
-      timeout = setTimeout(update, 1000);
+const getTextComponent = (language, sessionProps = {}) => function(container, componentState) {
+    const editor = createEditor(container, `ace/mode/${language}`, true);
+    for (const [k, v] of Object.entries(sessionProps)) editor.session[k] = v;
+    layout.eventHub.on(`${componentState.componentName}Update`, (newValue) => {
+      editor.session.setValue(newValue);
+      if (container.isHidden) container.on("shown", () => void editor.resize());
     });
+};
 
-    let lastStartTime = -1;
-    async function checkRestart() {
-      const response = await fetch("/status");
-      let { startTime } = JSON.parse(await response.text());
-      if (startTime != lastStartTime) {
-        lastStartTime = startTime;
-        await update();
-      }
-    }
-    checkRestart();
-    setInterval(checkRestart, 2000);
+registerStackComponent("disassembly", getTextComponent("c_cpp", {gutterRenderer: {
+  getWidth: (session, lastLineNumber, config) => 10 * config.characterWidth,
+  getText: (session, row) => `0x${row.toString(16).padStart(8, "0")}`
+}}));
 
-    async function update() {
-      let input = editor.getValue();
-      container.extendState({
-        input: input,
-      });
+for (const [name, language] of Object.entries({
+  assembly: "assembly_x86",
+  decompilation: "c_cpp",
+  output: "text"
+})) registerStackComponent(name, getTextComponent(language));
 
-      layout.eventHub.emit("disassemblyUpdate", "Compiling...");
-      layout.eventHub.emit("assemblyUpdate", "Compiling...");
-
-      const response = await fetch("/compile", {
-        method: "POST",
-        body: input,
-      });
-      let { disassembly, graph, assembly } = JSON.parse(await response.text());
-
-      layout.eventHub.emit("disassemblyUpdate", disassembly);
-      layout.eventHub.emit("graphUpdate", graph);
-      layout.eventHub.emit("assemblyUpdate", assembly);
-    }
-  }
-);
-
-layout.registerComponent(
-  "disassemblyComponent",
-  function (container, componentState) {
-    let editor = createEditor(container, "ace/mode/c_cpp", true);
-    editor.renderer.setShowGutter(false);
-
-    layout.eventHub.on("disassemblyUpdate", (disassembly) => {
-      editor.session.setValue(disassembly);
-    });
-  }
-);
-
-layout.registerComponent(
-  "graphComponent",
-  function (container, componentState) {
-    let element = container.getElement();
+registerStackComponent("graph", function(container, componentState) {
+    const element = container.getElement();
     element.addClass("graph");
 
     layout.eventHub.on("graphUpdate", (graph) => {
-      let svg = document.adoptNode(
+      element.empty();
+      if (!graph) return;
+      const svg = document.adoptNode(
         new DOMParser().parseFromString(graph, "image/svg+xml").documentElement
       );
 
-      element.empty();
       element.append(svg);
 
       const setup = () => {
@@ -169,18 +118,56 @@ layout.registerComponent(
   }
 );
 
-layout.registerComponent(
-  "assemblyComponent",
+registerComponent(
+  "input",
   function (container, componentState) {
-    let editor = createEditor(container, "ace/mode/assembly_x86", true);
-    layout.eventHub.on("assemblyUpdate", (assembly) => {
-      editor.session.setValue(assembly);
+    const editor = createEditor(container, "ace/mode/c_cpp", false);
+    editor.session.setValue(componentState.input);
+
+    let timeout;
+    editor.session.on("change", () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(update, 1000);
     });
+
+    async function update() {
+      const input = editor.getValue();
+      container.extendState({input});
+
+      layout.eventHub.emit("disassemblyUpdate", "Compiling...");
+      layout.eventHub.emit("assemblyUpdate", "Compiling...");
+      layout.eventHub.emit("decompilationUpdate", "Compiling...");
+      layout.eventHub.emit("outputUpdate", "Compiling...");
+      layout.eventHub.emit("graphUpdate", "");
+
+      const response = await fetch("/compile", {
+        method: "POST",
+        body: input,
+      });
+      for (const [k, v] of Object.entries(JSON.parse(await response.text())))
+        layout.eventHub.emit(`${k}Update`, v);
+    }
+
+    update();
   }
 );
 
-layout.on("stateChanged", () => {
-  localStorage.setItem("savedState", JSON.stringify(layout.toConfig()));
-});
-
-layout.init();
+(async function() {
+  const savedState = JSON.parse(localStorage.getItem("savedState"));
+  const layoutBuf = (new TextEncoder()).encode(JSON.stringify(defaultConfig));
+  const layoutVersion =
+    [...new Uint8Array(await crypto.subtle.digest("SHA-256", layoutBuf))]
+    .map((x) => x.toString(16).padStart(2, "0"))
+    .join("");
+  if (savedState && localStorage.getItem("layoutVersion") === layoutVersion) {
+    layout = new GoldenLayout(savedState);
+  } else {
+    layout = new GoldenLayout(defaultConfig);
+    localStorage.setItem("layoutVersion", layoutVersion);
+  }
+  for (const componentArgs of componentRegistrations) layout.registerComponent(...componentArgs);
+  layout.on("stateChanged", () => {
+    localStorage.setItem("savedState", JSON.stringify(layout.toConfig()));
+  });
+  layout.init();
+})();
